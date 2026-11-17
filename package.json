@@ -1,0 +1,42 @@
+{
+  "name": "dsh-prompt-refine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "输入框控制行里的「优化输入」按钮：点一下把草稿里的需求改写得更清楚、更具体、可直接执行（DSH 插件）。",
+  "keywords": ["dsh", "dsh-plugin", "prompt", "refine", "输入优化"],
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/host.test.mjs && node test/draft.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
