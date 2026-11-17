@@ -297,6 +297,10 @@ async function call(handler, req) {
     '我可以帮你改这段代码',
     '如果你还需要什么，随时告诉我',
     '作为 AI 助手，我建议你先明确目标',
+    // 元指令形态：把用户的话反转成"让助手去面对用户"。
+    '向用户发送一句问候语，内容为你好。',
+    '给用户回复一句问候',
+    '请向用户说明这个改动的影响',
   ];
   for (const s of reversed) {
     assert.equal(looksRoleReversed(s), true, `应判定为反转: ${s}`);
@@ -308,11 +312,37 @@ async function call(handler, req) {
     '把「提交」按钮改成「保存并继续」，位置不变',
     '优化首页加载速度，首屏要在 1 秒内出来',
     '给用户一个开关，让他们能自己关掉这个提示',
+    // 行首是"给用户"但后面不是"发送/回复/说"—— 是正常的需求，不能误伤。
+    '给用户一个批量导入的入口',
+    '你好',
   ];
   for (const s of fine) {
     assert.equal(looksRoleReversed(s), false, `不应判定为反转: ${s}`);
   }
-  ok('角色反转判定：6 条命中、4 条正常需求不误伤');
+  ok(`角色反转判定：${reversed.length} 条命中、${fine.length} 条正常需求不误伤`);
+}
+
+/* ── 12. 实际事故：发「你好」被改写成「向用户发送一句问候语」 ─────── */
+
+{
+  // 用户的原话只有两个字，改写器却把它反转成"指挥助手去面对用户"的元指令。
+  // 发出去模型只会回一句问候 —— 用户的需求（打招呼）被掉了个方向。
+  const llm = makeLlm('向用户发送一句问候语，内容为你好。');
+  const { ctx, routes } = makeCtx({ llm, selection: { provider: 'p', model: 'm' } });
+  apply(ctx);
+
+  const original = '你好';
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify({ text: original }))]), {
+    headers: { 'sec-fetch-site': 'same-origin', host: '127.0.0.1', origin: 'http://127.0.0.1' },
+    method: 'POST',
+  });
+  const { status, json } = await call(routes.get(ROUTE), req);
+
+  assert.equal(status, 200);
+  assert.equal(json.ok, true);
+  assert.equal(json.changed, false, '不能采纳元指令');
+  assert.equal(json.text, original, '必须把「你好」原样留下');
+  ok('发「你好」被改写成元指令 → 原样保留原文');
 }
 
 console.log('\n全部通过');
