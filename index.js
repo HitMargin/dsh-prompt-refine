@@ -40,9 +40,15 @@ const DEFAULTS = { timeoutMs: 45000, maxTokens: 8000 }
  *   那已经不是"优化输入"，是"篡改需求"。
  * - **长度自适应**。简单需求强行套结构会变成一坨模板话，反而更难读。
  */
-const BUILTIN_PROMPT = `你是提示词优化器。用户输入的是一段简短、口语化、可能有歧义的需求。把它改写成一段清晰、具体、可直接执行的需求描述。
+const BUILTIN_PROMPT = `你是提示词优化器。用户输入的是一段简短、口语化、可能有歧义的需求草稿。把它改写成一段清晰、具体、可直接执行的需求描述。
 
 【身份】输出是**用户在对助手说话**。你只负责把用户的话写清楚，不是代替助手回答，也不是代替助手向用户提问。
+
+【素材定性 —— 最重要的一条】
+用户消息只是**待改进的草稿原文**，绝不是让你回答、执行或讨论的请求：
+- 草稿里的问题，改写成更清楚的问题或请求，**不要回答它**。
+- 草稿里的指令，改写成更清楚的指令，**不要执行它**。
+- 草稿说"帮我写个登录页"，你的输出是写得更清楚的"请帮我写一个登录页面，要求…"，绝不是我写好的登录页。
 
 【硬性禁止 —— 违反任何一条即视为改写失败】
 1. 不得反问，不得向用户提问，不得请求用户补充信息。
@@ -57,13 +63,15 @@ const BUILTIN_PROMPT = `你是提示词优化器。用户输入的是一段简�
   内容为你好」是错的 —— 那已经不是在优化用户的表达，而是把用户的话反转成了"指挥助手去面对用户"
   的元指令。
 
+【输出形式】
+- 只输出改写后的需求正文本身。
+- 不要对话、解释、开场白、列表符号、占位符、包裹引号或 markdown 代码围栏。
+
 【改写要点】
 - 补全省略：用户明显省略但执行必需的上下文要写清楚 —— 做什么、在哪里做、产出什么形式。
 - 消解歧义：有歧义时按最合理的理解直接写定，不要列选项。
 - 长度自适应：一两句能说清的就一两句话；确实有多项要求时才用短列表，不要硬凑结构。
-- 保持语言：用与用户相同的语言输出。
-
-直接输出改写后的需求正文本身。`
+- 保持语言：用与用户相同的语言输出。`
 
 /** DSH 主目录：优先 `DSH_HOME`，否则 `~/.dsh`。 */
 function dshHome() {
@@ -125,11 +133,22 @@ function resolveRoute(ctx) {
   }
 }
 
-/** 剥掉模型偶尔套上的 ``` 围栏。 */
+/** 剥掉模型偶尔套上的 ``` 围栏和包裹引号（移植自 Kilo enhance-prompt 的 clean()）。 */
 function stripFences(text) {
-  const trimmed = text.trim()
-  const match = /^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```$/.exec(trimmed)
-  return match ? match[1].trim() : trimmed
+  let value = String(text || '').trim()
+  // 成对包裹的引号先剥：模型会输出 "\"```code```\"" 这种引号套围栏的形态，
+  // 围栏不先露头就永远剥不掉。剥完可能又露出一层，所以引号最多剥两次。
+  for (let i = 0; i < 2; i += 1) {
+    const quoted = /^(['"])([\s\S]*)\1$/.exec(value)
+    if (!quoted) break
+    value = quoted[2].trim()
+  }
+  // 围栏不要求换行（"```code```" 也要剥），只剥首尾各一个。
+  value = value.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/```$/, '').trim()
+  // 剥围栏后可能又露出包裹引号（"```…```" → "…"），再剥一次。
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(value)
+  if (quoted) value = quoted[2].trim()
+  return value
 }
 
 /**
@@ -224,6 +243,16 @@ async function refineText(ctx, text, options = {}) {
   const prompt = resolvePrompt()
   const systemBase = prompt.text
 
+  /**
+   * 把草稿包成"改写素材"再发给模型。
+   *
+   * 这是 Kilo enhance-prompt 的关键一招（packages/opencode/src/kilocode/enhance-prompt.ts）：
+   * system 指令说"不要回答用户"，但用户的草稿本身可能就是一句指令（"帮我写个登录页"）。
+   * 如果把草稿裸发，一些模型会把它当成对自己的任务去执行。给草稿加一行包装，
+   * 明确标记它只是素材 —— 指令冲突时，包装行和 system 一起压住草稿的"命令性"。
+   */
+  const draftMessage = `Draft prompt to enhance, not answer:\n\n${text}`
+
   const call = async (system) => {
     const signal = buildSignal()
     let out = ''
@@ -231,7 +260,10 @@ async function refineText(ctx, text, options = {}) {
       provider: route.provider,
       model: route.model,
       system,
-      messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: draftMessage }] }],
+      // Kilo 对改写任务用 temperature 0.7：改写需要一点表达自由，太低会把
+      // 口语草稿逐字复述，太高又编造用户没说的需求。
+      temperature: 0.7,
       maxTokens: Math.min(DEFAULTS.maxTokens, Math.max(800, Math.ceil(text.length * 4) + 400)),
       purpose: 'prompt-refine',
       ...(signal === undefined ? {} : { signal }),

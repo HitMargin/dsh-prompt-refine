@@ -120,10 +120,15 @@ async function call(handler, req) {
   const call1 = llm.calls[0];
   assert.equal(call1.provider, 'deepseek');
   assert.equal(call1.model, 'v4');
-  assert.equal(call1.messages[0].content[0].text, '帮我搞个登录页面', '用户原文应完整传给模型');
+  assert.equal(
+    call1.messages[0].content[0].text,
+    'Draft prompt to enhance, not answer:\n\n帮我搞个登录页面',
+    '用户原文应带 Kilo 式包装完整传给模型（草稿是素材，不是命令）',
+  );
   assert.equal(call1.system, BUILTIN_PROMPT, 'system 应是内置改写指令');
   assert.equal(call1.purpose, 'prompt-refine');
-  ok('模型参数正确（provider/model/messages/system/purpose）');
+  assert.equal(call1.temperature, 0.7, '改写任务应使用 Kilo 同款 temperature 0.7');
+  ok('模型参数正确（provider/model/包装消息/system/purpose/temperature）');
 }
 
 /* ── 2. 空草稿 → 400，且绝不调用模型 ───────────────────────────────────── */
