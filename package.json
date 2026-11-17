@@ -4,12 +4,19 @@
   "private": true,
   "type": "module",
   "description": "输入框控制行里的「优化输入」按钮：点一下把草稿里的需求改写得更清楚、更具体、可直接执行（DSH 插件）。",
-  "keywords": ["dsh", "dsh-plugin", "prompt", "refine", "输入优化"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "prompt",
+    "refine",
+    "输入优化"
+  ],
   "license": "MIT",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
