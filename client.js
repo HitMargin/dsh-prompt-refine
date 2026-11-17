@@ -65,14 +65,19 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
+/*
+ * 形态对齐 composer 工具行里的同级控件（权限、计划、模型选择）：无边框、
+ * 28px 高、靠 hover 背景反馈，而不是靠描边把自己从一排图标里"框"出来。
+ * 之前用 1px border + 0 10px padding，在那一排里像贴上去的胶囊，明显比邻居重。
+ */
 .${NS}-root {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
+  gap: 5px;
+  height: 28px;
   max-width: 200px;
-  padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2, transparent);
+  padding: 0 7px;
+  border: none;
   border-radius: var(--dsw-radius-sm, 6px);
   background: transparent;
   color: var(--dsw-alias-label-secondary, inherit);
@@ -81,7 +86,7 @@ window.__ModuleLoader__.load({
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 }
 .${NS}-root:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover, transparent);
@@ -94,14 +99,25 @@ window.__ModuleLoader__.load({
   cursor: default;
   opacity: 0.65;
 }
+/*
+ * 成功 / 失败用"淡底色 + 文字着色"表达，不再改边框。
+ * color-mix 不被支持时整条声明作废、回落到透明，不会留下半个样式。
+ */
 .${NS}-root[data-phase="done"],
 .${NS}-root[data-phase="restored"] {
-  border-color: var(--dsw-alias-state-success-primary, currentColor);
   color: var(--dsw-alias-state-success-primary, inherit);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 14%, transparent);
 }
 .${NS}-root[data-phase="error"] {
-  border-color: var(--dsw-alias-state-error-primary, currentColor);
   color: var(--dsw-alias-label-error, inherit);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 14%, transparent);
+}
+.${NS}-root[data-phase="done"]:hover:not(:disabled),
+.${NS}-root[data-phase="restored"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 22%, transparent);
+}
+.${NS}-root[data-phase="error"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 22%, transparent);
 }
 .${NS}-icon {
   flex: none;
@@ -408,6 +424,13 @@ window.__ModuleLoader__.load({
     return {
       name,
       inject: ['slots', 'locale'],
+
+      /**
+       * 测试缝：样式表是"写错了也照样跑、只有肉眼能看出来"的那类代码
+       * （多一条 border 就在输入框里显得格格不入），离线测不了渲染，但能测文本。
+       * 浏览器端不读这个字段。
+       */
+      __internals: { CSS },
 
       /**
        * 客户端插件入口。

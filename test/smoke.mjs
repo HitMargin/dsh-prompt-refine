@@ -132,6 +132,47 @@ if (seat && (!seat.result || typeof seat.result.component !== 'function')) {
 }
 if (!stylesMounted) fail('样式没挂载');
 
+/* ── 样式与同级控件的一致性 ──
+ * 这些是"写错了也照样跑、只有肉眼能看出来"的约束：
+ * 多一条 border，按钮就在 composer 那一排无边框图标里像块贴上去的胶囊。
+ */
+{
+  const css = plugin.__internals && plugin.__internals.CSS;
+  if (typeof css !== 'string' || css.length === 0) {
+    fail('__internals.CSS 缺失，无法校验样式');
+  } else {
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, ''); // 注释里提到的 border 不算
+    // `border: none` 是我们要的（无边框），只有"真的画了一道线"才该被拦下。
+    // 注意别用 `border\s*:\s*(?!none)` 这种写法：正则回溯会让 `border: none` 也命中
+    // （\s* 可以少吃一个空格，让否定预查在 " none" 上成功）。
+    const shorthand = [...bare.matchAll(/border\s*:\s*([^;}]+)/gi)]
+      .map((m) => m[1].trim().toLowerCase())
+      .filter((v) => v.length > 0);
+    const drewShorthand = shorthand.some((v) => v !== 'none');
+    const drewSide = /border-(top|right|bottom|left|color|width)\s*:/i.test(bare);
+    if (drewShorthand || drewSide) {
+      fail(`不应再出现描边（border: ${shorthand.join(', ')}）—— 同级控件都是无边框的`);
+    } else {
+      ok('无边框（与 composer 工具行的同级控件一致）');
+    }
+
+    if (!/height:\s*28px/.test(bare)) fail('高度应为 28px，与同级控件对齐');
+    else ok('高度 28px，与同级控件一致');
+
+    if (!/font:\s*inherit/.test(bare)) fail('应继承宿主字体（font: inherit）');
+    else ok('字体继承宿主（font: inherit）');
+
+    for (const token of ['interactive-bg-hover', 'interactive-bg-active', 'label-secondary']) {
+      if (!css.includes(`--dsw-alias-${token}`)) fail(`缺少主题变量 --dsw-alias-${token}`);
+    }
+    ok('配色全部走 --dsw-alias-* 主题变量（深浅色主题都会跟随）');
+
+    // 成功/失败靠淡底色表达，而不是描边 —— 描边上面已经禁掉了。
+    if (!/data-phase="done"[\s\S]{0,140}color-mix/.test(bare)) fail('done 相位应有淡底色反馈');
+    else ok('成功/失败相位用淡底色反馈（不依赖边框）');
+  }
+}
+
 // 3. 组件渲染：逐相位强制状态，确认每个分支都不炸、文案对得上。
 if (seat) {
   const Component = seat.result.component;
