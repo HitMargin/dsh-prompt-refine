@@ -87,6 +87,8 @@ node test/draft.test.mjs   # 草稿：setDraft 刷没刷界面都写对、撤回
 
 > host 半边（`index.js`）改完**要重启应用**才生效。
 
-## 许可
+## 许可证
 
-MIT
+本项目基于 [MIT](LICENSE) 协议开源，Copyright (c) 2026 HitMargin。
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)
