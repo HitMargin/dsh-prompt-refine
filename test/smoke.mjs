@@ -162,6 +162,31 @@ if (!stylesMounted) fail('样式没挂载');
     if (!/font:\s*inherit/.test(bare)) fail('应继承宿主字体（font: inherit）');
     else ok('字体继承宿主（font: inherit）');
 
+    // 字号/字重/行高必须跟同级控件（InputBar.module.css 的 .select）一致，
+    // 否则按钮会比邻居小一圈 —— 这三个值不是我拍的，是照抄规范的。
+    for (const [re, label] of [
+      [/font-size:\s*13px/, 'font-size: 13px'],
+      [/font-weight:\s*500/, 'font-weight: 500'],
+      [/line-height:\s*20px/, 'line-height: 20px'],
+      [/height:\s*28px/, 'height: 28px'],
+    ]) {
+      if (!re.test(bare)) fail(`缺少 ${label} —— 与同级控件不一致`);
+    }
+    ok('字号 13px / 字重 500 / 行高 20px / 高 28px，与同级控件一致');
+
+    // 这是用户实际反馈的问题：hover 时文字 shouldn't 变深色。
+    // 官方 .select 的 hover 只改 background-color，一个字都不动 color。
+    const hoverRule = /:hover:not\(:disabled\)\s*\{([^}]*)\}/.exec(bare);
+    // 注意别用 /color\s*:/：那会命中 background-color 里的 "color:"。
+    // 要求 color 前面是语句边界（起始/分号/左花括号），才算独立的 color 声明。
+    const setsTextColor = /(?:^|[;{])\s*color\s*:/m.test(hoverRule ? hoverRule[1] : '');
+    if (!hoverRule) fail('缺少 hover 规则');
+    else if (setsTextColor) {
+      fail('hover 规则里出现了 color —— 浅色主题下文字会变深色，同级控件不这么做');
+    } else {
+      ok('hover 只换背景色，不改文字颜色（与同级控件一致）');
+    }
+
     for (const token of ['interactive-bg-hover', 'interactive-bg-active', 'label-secondary']) {
       if (!css.includes(`--dsw-alias-${token}`)) fail(`缺少主题变量 --dsw-alias-${token}`);
     }

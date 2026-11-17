@@ -66,58 +66,79 @@ window.__ModuleLoader__.load({
 
     const CSS = `
 /*
- * 形态对齐 composer 工具行里的同级控件（权限、计划、模型选择）：无边框、
- * 28px 高、靠 hover 背景反馈，而不是靠描边把自己从一排图标里"框"出来。
- * 之前用 1px border + 0 10px padding，在那一排里像贴上去的胶囊，明显比邻居重。
+ * 对齐 composer 工具行里同级控件的真实规范 —— 取自
+ * dsh-client-ui-conversation/src/client/skeleton/InputBar.module.css 的 .select
+ * （Plan / Read-only / 模型选择用的就是它）：
+ *
+ *   height: 28px; padding: 0 20px 0 8px; border: none;
+ *   border-radius: var(--dsw-radius-sm);
+ *   color: var(--dsw-alias-label-secondary);
+ *   font-size: 13px; line-height: 20px; font-weight: 500;
+ *   @media (hover: hover) { :hover { background-color: ...bg-hover } }
+ *
+ * 关键是最后一条：**hover 只换背景色，不动文字颜色**。之前我多写了
+ * color: label-primary 这一句，浅色主题下那就是深色，于是"鼠标移上去文字变黑"。
+ * 字号/字重/行高当时也没跟上（12px、无 font-weight、line-height: 1），所以看着比邻居小一圈。
+ *
+ * 注意：这段是模板字符串，注释里不能出现反引号，否则字符串会被提前截断。
  */
 .${NS}-root {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  max-width: 220px;
   height: 28px;
-  max-width: 200px;
-  padding: 0 7px;
+  padding: 0 8px;
   border: none;
   border-radius: var(--dsw-radius-sm, 6px);
-  background: transparent;
+  outline: none;
+  background-color: transparent;
   color: var(--dsw-alias-label-secondary, inherit);
   font: inherit;
-  font-size: 12px;
-  line-height: 1;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  appearance: none;
+  transition: background-color 120ms ease;
 }
-.${NS}-root:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover, transparent);
-  color: var(--dsw-alias-label-primary, inherit);
+@media (hover: hover) {
+  .${NS}-root:hover:not(:disabled) {
+    background-color: var(--dsw-alias-interactive-bg-hover, transparent);
+  }
 }
 .${NS}-root:active:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-active, transparent);
+  background-color: var(--dsw-alias-interactive-bg-active, transparent);
 }
 .${NS}-root:disabled {
   cursor: default;
-  opacity: 0.65;
+  opacity: 0.5;
 }
 /*
  * 成功 / 失败用"淡底色 + 文字着色"表达，不再改边框。
  * color-mix 不被支持时整条声明作废、回落到透明，不会留下半个样式。
+ *
+ * 注意这里**只改背景**，文字颜色只在非 hover 时着色：hover 一律让位给通用
+ * 背景反馈，和同级控件"hover 只换背景"的行为保持一致。
  */
 .${NS}-root[data-phase="done"],
 .${NS}-root[data-phase="restored"] {
   color: var(--dsw-alias-state-success-primary, inherit);
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 14%, transparent);
+  background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 14%, transparent);
 }
 .${NS}-root[data-phase="error"] {
   color: var(--dsw-alias-label-error, inherit);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 14%, transparent);
+  background-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 14%, transparent);
 }
-.${NS}-root[data-phase="done"]:hover:not(:disabled),
-.${NS}-root[data-phase="restored"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 22%, transparent);
-}
-.${NS}-root[data-phase="error"]:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 22%, transparent);
+@media (hover: hover) {
+  .${NS}-root[data-phase="done"]:hover:not(:disabled),
+  .${NS}-root[data-phase="restored"]:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--dsw-alias-state-success-primary, transparent) 22%, transparent);
+  }
+  .${NS}-root[data-phase="error"]:hover:not(:disabled) {
+    background-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, transparent) 22%, transparent);
+  }
 }
 .${NS}-icon {
   flex: none;

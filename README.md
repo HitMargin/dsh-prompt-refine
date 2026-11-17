@@ -39,6 +39,26 @@
 
 宁可"没优化"，也不能"把用户的话换成一句反问"。
 
+## 样式对齐
+
+按钮刻意做成 composer 工具行里同级控件的模样，而不是自己一套。规范取自
+`dsh-client-ui-conversation/src/client/skeleton/InputBar.module.css` 的 `.select`
+（Plan / Read-only / 模型选择用的就是它）：
+
+| | 值 |
+| --- | --- |
+| 高度 | `28px` |
+| 字号 / 字重 / 行高 | `13px` / `500` / `20px` |
+| 内边距 | `0 8px` |
+| 边框 | `none`（这一排控件都不描边） |
+| 文字色 | `--dsw-alias-label-secondary` |
+| hover | **只换 `background-color`，不动文字颜色** |
+
+最后一条是踩过的坑：我一开始 hover 时多写了 `color: var(--dsw-alias-label-primary)`，
+浅色主题下那就是深色，于是"鼠标移上去文字变黑"——而邻居们 hover 时一个字都不改。
+
+测试里钉住了这些值（含"hover 规则里不准出现 color"），改坏了会红。
+
 判定刻意只匹配**第一人称指向用户**的说法，避免误伤正常需求里的"你"——比如
 「帮我在登录页加个提示：密码错误时告诉用户"密码不正确"」不会被判成反问。
 
