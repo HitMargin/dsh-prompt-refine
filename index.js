@@ -42,17 +42,22 @@ const DEFAULTS = { timeoutMs: 45000, maxTokens: 8000 }
  */
 const BUILTIN_PROMPT = `你是提示词优化器。用户输入的是一段简短、口语化、可能有歧义的需求。把它改写成一段清晰、具体、可直接执行的需求描述。
 
-改写规则：
+【身份】输出是**用户在对助手说话**。你只负责把用户的话写清楚，不是代替助手回答，也不是代替助手向用户提问。
 
-1. **忠于原意**。不得增加、删除或改变用户要求的功能与范围。
-2. **补全省略**。用户明显省略但执行必需的上下文要写清楚：做什么、在哪里做、产出什么形式。
-3. **消解歧义**。有歧义时按最合理的理解写定，不要反问、不要列选项。
-4. **长度自适应**。一两句能说清的就一两句话；确实有多项要求时才用短列表，不要硬凑结构。
-5. **不发明约束**。不要替用户决定资源、团队分工、时间期限、技术选型，除非用户提过。
-6. **只输出正文**。不要解释、不要加引号、不要写"以下是优化后的提示词"之类的话。
-7. **保持语言**。用与用户相同的语言输出。
+【硬性禁止 —— 违反任何一条即视为改写失败】
+1. 不得反问，不得向用户提问，不得请求用户补充信息。
+2. 不得以助手身份说话。禁止出现"我可以帮你""我来帮你""请告诉我你需要什么""你希望我做什么""如果你需要""要不要我""作为 AI / 作为助手"这类表述。
+3. 不得输出元话语。不要写"以下是优化后的提示词""我明白了""好的"之类。
+4. 不得增加、删除或改变用户要求的功能与范围。
+5. 不得替用户决定资源、团队分工、时间期限、技术选型 —— 除非用户自己提过。
 
-直接输出改写后的提示词正文。`
+【改写要点】
+- 补全省略：用户明显省略但执行必需的上下文要写清楚 —— 做什么、在哪里做、产出什么形式。
+- 消解歧义：有歧义时按最合理的理解直接写定，不要列选项。
+- 长度自适应：一两句能说清的就一两句话；确实有多项要求时才用短列表，不要硬凑结构。
+- 保持语言：用与用户相同的语言输出。
+
+直接输出改写后的需求正文本身。`
 
 /** DSH 主目录：优先 `DSH_HOME`，否则 `~/.dsh`。 */
 function dshHome() {
@@ -122,6 +127,50 @@ function stripFences(text) {
 }
 
 /**
+ * 判断改写结果是不是"角色反了"——写成了助手在反问用户，而不是用户的需求。
+ *
+ * 为什么需要这一层：提示词里已经明令禁止反问和助手口吻，但**提示词不是保证**。
+ * 一旦模型把用户的需求改写成"请告诉我你需要什么"，用户原话就被顶掉了，发出去
+ * 模型只会回一句"你这句话像是模板提示语" —— 这正是要防的事故。
+ *
+ * 所以这里用确定性规则兜一道：命中就判定改写失败，保留用户原文。
+ * 宁可"没优化"，也不能"把用户的话换成一句反问"。
+ *
+ * 刻意只匹配**第一人称指向用户**的说法，避免误伤正常需求里出现的"你"
+ * （比如"帮我在登录页加个提示：密码错误"——这里的"你"不构成反问）。
+ *
+ * @param {string} text 待检查文本。
+ * @returns {boolean} true 表示角色反了。
+ */
+function looksRoleReversed(text) {
+  const value = String(text || '')
+  if (value.trim().length === 0) return false
+
+  const patterns = [
+    // 直接向用户提问 / 索要信息
+    /请告诉我.{0,12}(什么|哪些|如何|怎么|需要)/,
+    /请问你.{0,8}(需要|想要|希望)/,
+    /你(需要|想要|希望).{0,10}(我|帮忙|做).{0,6}(什么|哪些|怎么)/,
+    /你希望我.{0,10}(做|帮|提供)/,
+    /可以告诉我.{0,10}(什么|需求|目标)/,
+    // 助手自述身份 / 主动请缨
+    /我可以(帮|为)你/,
+    /我(来|会)帮(你|您)/,
+    /作为\s*(一个)?\s*(AI|人工智能|助手|模型|语言模型)/,
+    /如果你(还)?需要.{0,10}(我|可以|随时)/,
+    /要不要我/,
+    /需要我.{0,8}(帮|做|继续)/,
+  ]
+  return patterns.some((re) => re.test(value))
+}
+
+/** 追加在重试时 system 末尾的硬性约束。 */
+const ROLE_GUARD_CLAUSE = `
+
+上一次输出不合格：它把用户的需求写成了助手在反问用户。
+重写。输出必须是**用户在对助手说话**的需求正文本身：不得提问、不得索要信息、不得以助手身份说话。`
+
+/**
  * 调一次模型，把需求改写清楚。
  *
  * 调用形状与 `dsh-prompt-hardener` 里已验证可用的那条一致：`llm.stream({ provider, model,
@@ -144,31 +193,65 @@ async function refineText(ctx, text, options = {}) {
   }
 
   const timeoutMs = options.timeoutMs > 0 ? options.timeoutMs : DEFAULTS.timeoutMs
-  const signals = [options.signal].filter(Boolean)
-  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-    signals.push(AbortSignal.timeout(timeoutMs))
+
+  /**
+   * 组一次调用的 signal。
+   *
+   * 每次调用都新建一个超时 signal —— 重试要重新计时，否则第一次耗掉的时间会
+   * 让第二次一出生就接近超时，等于白重试。
+   */
+  const buildSignal = () => {
+    const signals = [options.signal].filter(Boolean)
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      signals.push(AbortSignal.timeout(timeoutMs))
+    }
+    if (signals.length === 0) return undefined
+    if (signals.length === 1) return signals[0]
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals)
+    return signals[0]
   }
-  let signal
-  if (signals.length === 0) signal = undefined
-  else if (signals.length === 1) signal = signals[0]
-  else if (typeof AbortSignal.any === 'function') signal = AbortSignal.any(signals)
-  else signal = signals[0]
 
   const prompt = resolvePrompt()
-  let out = ''
-  for await (const chunk of llm.stream({
-    provider: route.provider,
-    model: route.model,
-    system: prompt.text,
-    messages: [{ role: 'user', content: [{ type: 'text', text }] }],
-    maxTokens: Math.min(DEFAULTS.maxTokens, Math.max(800, Math.ceil(text.length * 4) + 400)),
-    purpose: 'prompt-refine',
-    ...(signal === undefined ? {} : { signal }),
-  })) {
-    if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
+  const systemBase = prompt.text
+
+  const call = async (system) => {
+    const signal = buildSignal()
+    let out = ''
+    for await (const chunk of llm.stream({
+      provider: route.provider,
+      model: route.model,
+      system,
+      messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+      maxTokens: Math.min(DEFAULTS.maxTokens, Math.max(800, Math.ceil(text.length * 4) + 400)),
+      purpose: 'prompt-refine',
+      ...(signal === undefined ? {} : { signal }),
+    })) {
+      if (chunk && chunk.type === 'text-delta' && typeof chunk.text === 'string') out += chunk.text
+    }
+    return stripFences(out)
   }
 
-  const refined = stripFences(out)
+  let refined = await call(systemBase)
+  if (refined.length === 0) throw new Error('模型没有返回内容')
+
+  /*
+   * 角色反转兜底。
+   *
+   * 提示词里已经明令禁止反问，但提示词不是保证：模型完全可能把用户需求改写成
+   * "请告诉我你需要什么"，把用户的话顶掉。一旦发出去，对方只会回一句"你这句话像是
+   * 模板提示语"，用户的需求就丢了。
+   *
+   * 所以命中就重试一次（追加硬性约束）；两次都反就判定改写失败，交回路由层保留原文。
+   * 宁可"没优化"，也不能"把用户的话换成一句反问"。
+   */
+  if (looksRoleReversed(refined)) refined = await call(`${systemBase}${ROLE_GUARD_CLAUSE}`)
+
+  if (looksRoleReversed(refined)) {
+    const error = new Error('改写结果像在向用户反问，已保留原文')
+    error.code = 'ROLE_REVERSED'
+    throw error
+  }
+
   if (refined.length === 0) throw new Error('模型没有返回内容')
   return refined
 }
@@ -249,6 +332,8 @@ export function apply(ctx) {
         })
         res.end(body)
       }
+      // text 提到 try 外面：角色反转时要靠它回填原文。
+      let text = ''
       try {
         if (!isTrustedWrite(req)) {
           send(403, { ok: false, error: 'cross-site request rejected' })
@@ -260,7 +345,7 @@ export function apply(ctx) {
         }
 
         const body = await readJsonBody(req)
-        const text = body && typeof body.text === 'string' ? body.text : ''
+        text = body && typeof body.text === 'string' ? body.text : ''
         if (text.trim().length === 0) {
           send(400, { ok: false, error: 'text required' })
           return
@@ -270,6 +355,13 @@ export function apply(ctx) {
         const changed = refined !== text
         send(200, { ok: true, changed, text: refined })
       } catch (error) {
+        // 角色反转不是"失败"而是"不改"：原话必须留在输入框里，一个字都不动。
+        // 只有这条路能既拦住反问、又不让用户的话凭空消失。
+        if (error && error.code === 'ROLE_REVERSED') {
+          note(`refine rejected (role reversed), original kept`)
+          send(200, { ok: true, changed: false, text, error: String(error.message || error) })
+          return
+        }
         send(200, { ok: false, changed: false, text: '', error: String((error && error.message) || error) })
       }
     }
@@ -304,4 +396,4 @@ export function apply(ctx) {
   }, 'prompt-refine: refine route')
 }
 
-export { BUILTIN_PROMPT, DEFAULTS, ROUTE }
+export { BUILTIN_PROMPT, DEFAULTS, ROLE_GUARD_CLAUSE, ROUTE, looksRoleReversed }

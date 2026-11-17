@@ -358,6 +358,15 @@ window.__ModuleLoader__.load({
               throw new Error((payload && payload.error) || t('failed'))
             }
 
+            // 宿主判定"改写结果像反问，保留原文"。这不是失败，是**没改** ——
+            // 草稿一个字都没动，但要告诉用户为什么点了没反应。
+            if (payload.changed === false
+              && typeof payload.error === 'string' && payload.error.length > 0) {
+              setPhase('error')
+              setError(payload.error)
+              return
+            }
+
             const refined = typeof payload.text === 'string' ? payload.text : ''
             if (refined.trim().length === 0) throw new Error(t('failed'))
             if (refined === text) {

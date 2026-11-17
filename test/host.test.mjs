@@ -11,7 +11,7 @@ import { Readable } from 'node:stream';
 // 让提示词播种落在临时目录，别在测试里写用户的真实 home。
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'prompt-refine-test-'));
 
-const { apply, ROUTE, BUILTIN_PROMPT } = await import('../index.js');
+const { apply, ROUTE, BUILTIN_PROMPT, looksRoleReversed } = await import('../index.js');
 
 const ok = (msg) => console.log('ok   ' + msg);
 
@@ -209,6 +209,110 @@ async function call(handler, req) {
   const { status } = await call(routes.get(ROUTE), req);
   assert.equal(status, 405);
   ok('GET → 405');
+}
+
+/* ── 8. 角色反转：改写结果像助手在反问用户 ───────────────────────────── */
+
+{
+  // 真实事故：用户需求被改写成"请告诉我你需要什么"，发出去对方只会回
+  // "你这句话像是模板提示语"。原话必须留在输入框里。
+  const llm = makeLlm('请告诉我你需要优化成什么，比如要写什么、在哪里用、希望得到什么形式的结果。');
+  const { ctx, routes } = makeCtx({ llm, selection: { provider: 'p', model: 'm' } });
+  apply(ctx);
+
+  const original = '你好，帮我把登录页的报错文案改清楚一点';
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify({ text: original }))]), {
+    headers: { 'sec-fetch-site': 'same-origin', host: '127.0.0.1', origin: 'http://127.0.0.1' },
+    method: 'POST',
+  });
+  const { status, json } = await call(routes.get(ROUTE), req);
+
+  assert.equal(status, 200, '角色反转是"没改"而不是 HTTP 失败');
+  assert.equal(json.ok, true);
+  assert.equal(json.changed, false, '不应标记为已改写');
+  assert.equal(json.text, original, '必须把原话原样返回，一个字都不能动');
+  assert.ok(typeof json.error === 'string' && json.error.length > 0, '应带原因说明');
+  assert.equal(llm.calls.length, 2, '应重试一次：首轮 + 追加硬性约束的一轮');
+  ok('改写结果像反问 → 重试后仍不合格则保留原文');
+}
+
+/* ── 9. 首轮反转、重试合格 → 正常改写 ──────────────────────────────── */
+
+{
+  let n = 0;
+  const llm = {
+    calls: [],
+    stream: async function* (call) {
+      n += 1;
+      this.calls.push(call);
+      yield { type: 'text-delta', text: n === 1
+        ? '请问你需要我做什么？'
+        : '把登录页密码错误提示改成「密码不正确，请重新输入」。' };
+    },
+  };
+  const { ctx, routes } = makeCtx({ llm, selection: { provider: 'p', model: 'm' } });
+  apply(ctx);
+
+  const req = Object.assign(Readable.from([Buffer.from('{"text":"改一下登录页报错"}')]), {
+    headers: { 'sec-fetch-site': 'same-origin', host: '127.0.0.1', origin: 'http://127.0.0.1' },
+    method: 'POST',
+  });
+  const { json } = await call(routes.get(ROUTE), req);
+
+  assert.equal(json.changed, true, '重试合格应采纳');
+  assert.ok(json.text.includes('密码不正确'), '应采纳重试后的结果');
+  assert.equal(llm.calls.length, 2, '首轮 + 重试，共两次');
+  assert.ok(llm.calls[1].system.length > llm.calls[0].system.length, '重试应追加硬性约束');
+  ok('首轮反转、重试合格 → 采纳重试结果');
+}
+
+/* ── 10. 正常改写不受影响（不能因为加了兜底就误伤） ───────────────── */
+
+{
+  const good = '把登录页密码错误提示改成「密码不正确，请重新输入」。';
+  const llm = makeLlm(good);
+  const { ctx, routes } = makeCtx({ llm, selection: { provider: 'p', model: 'm' } });
+  apply(ctx);
+
+  const req = Object.assign(Readable.from([Buffer.from('{"text":"改一下登录页报错"}')]), {
+    headers: { 'sec-fetch-site': 'same-origin', host: '127.0.0.1', origin: 'http://127.0.0.1' },
+    method: 'POST',
+  });
+  const { json } = await call(routes.get(ROUTE), req);
+
+  assert.equal(json.ok, true);
+  assert.equal(json.changed, true);
+  assert.equal(json.text, good, '正常改写应原样采纳，一次调用');
+  assert.equal(llm.calls.length, 1, '不该触发重试');
+  ok('正常改写一次通过，不误伤');
+}
+
+/* ── 11. 判定函数本身 ──────────────────────────────────────────────── */
+
+{
+  const reversed = [
+    '请告诉我你需要优化成什么',
+    '请问你需要我做什么？',
+    '你希望我帮你做点什么',
+    '我可以帮你改这段代码',
+    '如果你还需要什么，随时告诉我',
+    '作为 AI 助手，我建议你先明确目标',
+  ];
+  for (const s of reversed) {
+    assert.equal(looksRoleReversed(s), true, `应判定为反转: ${s}`);
+  }
+
+  // 正常需求里出现"你"不该被误伤 —— 这是最容易写错的地方。
+  const fine = [
+    '帮我在登录页加个提示：密码错误时告诉用户「密码不正确」',
+    '把「提交」按钮改成「保存并继续」，位置不变',
+    '优化首页加载速度，首屏要在 1 秒内出来',
+    '给用户一个开关，让他们能自己关掉这个提示',
+  ];
+  for (const s of fine) {
+    assert.equal(looksRoleReversed(s), false, `不应判定为反转: ${s}`);
+  }
+  ok('角色反转判定：6 条命中、4 条正常需求不误伤');
 }
 
 console.log('\n全部通过');
