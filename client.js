@@ -176,6 +176,48 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* ── 状态持久化（按会话）──
+     *
+     * conversation.input.left 是 session scope 的槽：切走会话组件卸载，切回来
+     * 重建。状态放内存，切回来就是全新组件 —— 按钮回到 idle，撤回基准丢失。
+     * 更糟的是草稿里已经是改写结果，用户再点一下会被当成"原稿"再优化一遍。
+     *
+     * 所以 phase 和撤回基准都落到 sessionStorage，按会话 id 键控：
+     * 切回来组件重建时先把状态捞回来。不放 localStorage —— 那是跨会话共享的，
+     * 会话 A 的 phase 不该影响会话 B。
+     */
+    function stateKey(sessionId) {
+      return `${NS}:state:${sessionId}`
+    }
+
+    function loadState(sessionId) {
+      try {
+        const raw = sessionStorage.getItem(stateKey(sessionId))
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object') return null
+        return parsed
+      } catch {
+        return null
+      }
+    }
+
+    function saveState(sessionId, value) {
+      try {
+        sessionStorage.setItem(stateKey(sessionId), JSON.stringify(value))
+      } catch {
+        /* 存不进去就算了，内存态还在，只是切回来会丢 */
+      }
+    }
+
+    function clearState(sessionId) {
+      try {
+        sessionStorage.removeItem(stateKey(sessionId))
+      } catch {
+        /* 同上 */
+      }
+    }
+
     /**
      * 从"我自己"往上找输入卡片，再从卡片里取草稿。
      *
@@ -303,9 +345,35 @@ window.__ModuleLoader__.load({
         const { sessionId, inputActions } = props || {}
 
         const rootRef = React.useRef(null)
-        const undoRef = React.useRef(null) // { original, refined }
-        const [phase, setPhase] = React.useState('idle') // idle | working | done | error
-        const [error, setError] = React.useState('')
+        // 初始值从 sessionStorage 捞：切回本会话时组件是重建的，内存态已丢。
+        const saved = loadState(sessionId)
+        const undoRef = React.useRef(
+          saved && typeof saved.undo === 'object' && saved.undo !== null
+            ? saved.undo
+            : null
+        ) // { original, refined }
+        const [phase, setPhase] = React.useState(
+          saved && typeof saved.phase === 'string' ? saved.phase : 'idle'
+        ) // idle | working | done | error
+        const [error, setError] = React.useState(
+          saved && typeof saved.error === 'string' ? saved.error : ''
+        )
+
+        // 把当前状态落盘，供下次重建恢复。
+        // 只存 phase / error / undo —— 草稿本身在宿主那里，不重复存。
+        React.useEffect(() => {
+          if (!sessionId) return
+          if (phase === 'idle' && !undoRef.current && !error) {
+            // 干净态：直接清掉，不留垃圾
+            clearState(sessionId)
+            return
+          }
+          saveState(sessionId, {
+            phase,
+            error,
+            undo: undoRef.current,
+          })
+        }, [sessionId, phase, error])
 
         // 草稿一律**现读 DOM**，不订阅 `useInput`。两条理由：
         // 一是我只在按下按钮那一刻需要它，响应式订阅是多余的；
@@ -313,6 +381,8 @@ window.__ModuleLoader__.load({
         // 而"优化"必须作用于用户眼前这段文字。
 
         // 「已优化」/「已还原」停留一会儿就回到常态。
+        // 这个 effect 的清理函数在组件卸载时也会跑（clearTimeout），但不会写回状态 ——
+        // 状态写回由下面那个 saveState effect 统一管，这里只管计时。
         React.useEffect(() => {
           if (phase !== 'done' && phase !== 'restored') return undefined
           const timer = setTimeout(() => setPhase('idle'), FLASH_MS)
@@ -320,10 +390,16 @@ window.__ModuleLoader__.load({
         }, [phase])
 
         // 换会话时清掉上一份"可撤回"记录：草稿换了，撤回基准就没意义了。
+        // 注意：不能把 phase 强行设回 idle —— 那会把"已优化"状态也抹掉，
+        // 切回来就不知道草稿已经是改写结果了。改为重新加载该会话的状态。
         React.useEffect(() => {
-          undoRef.current = null
-          setPhase('idle')
-          setError('')
+          const loaded = loadState(sessionId)
+          undoRef.current = loaded && typeof loaded.undo === 'object' ? loaded.undo : null
+          const restoredPhase = loaded && typeof loaded.phase === 'string' ? loaded.phase : 'idle'
+          // working 是瞬时态，切回来时若还停在 working 说明上次请求没跑完就切走了，
+          // 归为 idle 更安全，别让用户对着一个永远转圈的按钮。
+          setPhase(restoredPhase === 'working' ? 'idle' : restoredPhase)
+          setError(loaded && typeof loaded.error === 'string' ? loaded.error : '')
         }, [sessionId])
 
         const busy = phase === 'working'
